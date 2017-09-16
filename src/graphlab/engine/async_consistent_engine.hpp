@@ -348,6 +348,24 @@ namespace graphlab {
          */
         dense_bitset has_cache;
 
+        /**
+         * \brief This optional vector contains caches of previous gather
+         * contributions for all the mirrors.
+         *
+         * Caching is done locally or remotely, and therefore a high-degree vertex may
+         * have multiple caches (one per mirror).
+         */
+        std::vector<conditional_gather_type> remote_gather_cache;
+
+        /**
+         * \brief A bit indicating if the local gather cache of mirror for that vertex is
+         * available.
+         */
+        dense_bitset has_remote_cache;
+
+        /// Per mirror cache locks
+        std::vector<simple_spinlock> cachelocks;
+
         bool use_cache;
 
         /// Engine threads.
@@ -546,6 +564,10 @@ namespace graphlab {
             vertexlocks.resize(graph.num_local_vertices());
             program_running.resize(graph.num_local_vertices());
             hasnext.resize(graph.num_local_vertices());
+            remote_gather_cache.resize(graph.num_local_vertices() * rmi.numprocs());
+            has_remote_cache.resize(graph.num_local_vertices() * rmi.numprocs());
+            has_remote_cache.clear();
+            cachelocks.resize(graph.num_local_vertices() * rmi.numprocs());
             if (use_cache) {
                 gather_cache.resize(graph.num_local_vertices(), gather_type());
                 has_cache.resize(graph.num_local_vertices());
