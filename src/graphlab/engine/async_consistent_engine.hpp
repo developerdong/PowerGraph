@@ -1059,7 +1059,7 @@ namespace graphlab {
                 std::vector<request_future<conditional_gather_type> > gather_futures;
                 std::vector<procid_t> gather_procs;
                         foreach(procid_t mirror, local_vertex.mirrors()) {
-                                if (has_remote_cache.get(lvid * rmi.numprocs() + mirror)) {
+                                if (!scheduler_ptr->empty() && has_remote_cache.get(lvid * rmi.numprocs() + mirror)) {
                                     cachelocks[lvid * rmi.numprocs() + mirror].lock();
                                     gather_result += remote_gather_cache[lvid * rmi.numprocs() + mirror];
                                     cachelocks[lvid * rmi.numprocs() + mirror].unlock();
