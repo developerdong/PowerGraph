@@ -398,8 +398,6 @@ namespace graphlab {
         /// engine option. Sets to true if factorized consistency is used
         bool factorized_consistency;
 
-        bool endgame_mode;
-
         /// Time when engine is started
         float engine_start_time;
 
@@ -614,33 +612,10 @@ namespace graphlab {
         void internal_signal(const vertex_type &vtx,
                              const message_type &message = message_type()) {
             if (force_stop) return;
-            if (started) {
-                const typename graph_type::vertex_record &rec = graph.l_get_vertex_record(vtx.local_id());
-                const procid_t owner = rec.owner;
-                if (endgame_mode) {
-                    // fast signal. push to the remote machine immediately
-                    if (owner != rmi.procid()) {
-                        const vertex_id_type vid = rec.gvid;
-                        rmi.remote_call(owner, &engine_type::rpc_signal, vid, message);
-                    } else {
-                        double priority;
-                        messages.add(vtx.local_id(), message, &priority);
-                        scheduler_ptr->schedule(vtx.local_id(), priority);
-                        consensus->cancel();
-                    }
-                } else {
-
-                    double priority;
-                    messages.add(vtx.local_id(), message, &priority);
-                    scheduler_ptr->schedule(vtx.local_id(), priority);
-                    consensus->cancel();
-                }
-            } else {
-                double priority;
-                messages.add(vtx.local_id(), message, &priority);
-                scheduler_ptr->schedule(vtx.local_id(), priority);
-                consensus->cancel();
-            }
+            double priority;
+            messages.add(vtx.local_id(), message, &priority);
+            scheduler_ptr->schedule(vtx.local_id(), priority);
+            consensus->cancel();
         } // end of schedule
 
 
@@ -791,12 +766,6 @@ namespace graphlab {
             }
         }
 
-        void set_endgame_mode() {
-            if (!endgame_mode) logstream(LOG_EMPH) << "Endgame mode\n";
-            endgame_mode = true;
-            rmi.dc().set_fast_track_requests(true);
-        }
-
         /**
          * \internal
          * Called when get_a_task returns no internal task not a scheduler task.
@@ -821,12 +790,6 @@ namespace graphlab {
                 logstream(LOG_DEBUG) << rmi.procid() << "-" << threadid << ": "
                                      << "\tTermination Double Checked" << std::endl;
 
-                if (!endgame_mode) logstream(LOG_EMPH) << "Endgame mode\n";
-                endgame_mode = true;
-                // put everyone in endgame
-                for (procid_t i = 0; i < rmi.dc().numprocs(); ++i) {
-                    rmi.remote_call(i, &async_consistent_engine::set_endgame_mode);
-                }
                 bool ret = consensus->end_done_critical_section(threadid);
                 if (ret == false) {
                     logstream(LOG_DEBUG) << rmi.procid() << "-" << threadid << ": "
@@ -1135,7 +1098,7 @@ namespace graphlab {
             timer ti;
             ti.start();
             while (1) {
-                if (timer::approx_time_seconds() != last_aggregator_check && !endgame_mode) {
+                if (timer::approx_time_seconds() != last_aggregator_check) {
                     last_aggregator_check = timer::approx_time_seconds();
                     std::string key = aggregator.tick_asynchronous();
                     if (key != "") {
@@ -1164,7 +1127,6 @@ namespace graphlab {
                 has_sched_msg = stat != sched_status::EMPTY;
                 if (stat != sched_status::EMPTY) {
                     eval_sched_task(sched_lvid, msg);
-                    if (endgame_mode) rmi.dc().flush();
                 } else if (!try_to_quit(threadid, has_sched_msg, sched_lvid, msg)) {
                     /*
                      * We failed to obtain a task, try to quit
@@ -1219,7 +1181,6 @@ namespace graphlab {
 
             engine_start_time = timer::approx_time_seconds();
             force_stop = false;
-            endgame_mode = false;
             programs_executed = 0;
             launch_timer.start();
 
