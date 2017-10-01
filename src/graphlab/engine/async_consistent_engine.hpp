@@ -824,9 +824,8 @@ namespace graphlab {
         }
 
 
-        conditional_gather_type perform_gather(vertex_id_type vid,
-                                               vertex_program_type &vprog_) {
-            vertex_program_type vprog = vprog_;
+        conditional_gather_type perform_gather_local(vertex_id_type vid) {
+            vertex_program_type vprog = vertex_program_type();
             lvid_type lvid = graph.local_vid(vid);
             local_vertex_type local_vertex(graph.l_vertex(lvid));
             vertex_type vertex(local_vertex);
@@ -1019,11 +1018,10 @@ namespace graphlab {
                             gather_futures.push_back(
                                     object_fiber_remote_request(rmi,
                                                                 mirror,
-                                                                &async_consistent_engine::perform_gather,
-                                                                vid,
-                                                                vprog));
+                                                                &async_consistent_engine::perform_gather_local,
+                                                                vid));
                         }
-            gather_result += perform_gather(vid, vprog);
+            gather_result += perform_gather_local(vid);
 
             for (size_t i = 0; i < gather_futures.size(); ++i) {
                 gather_result += gather_futures[i]();
