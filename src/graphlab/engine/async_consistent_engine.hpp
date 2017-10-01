@@ -824,6 +824,13 @@ namespace graphlab {
         }
 
 
+        std::pair<conditional_gather_type, message_type> perform_gather(vertex_id_type vid) {
+            message_type msg = message_type();
+            messages.get(graph.local_vid(vid), msg);
+            return std::make_pair(perform_gather_local(vid), msg);
+        }
+
+
         conditional_gather_type perform_gather_local(vertex_id_type vid) {
             vertex_program_type vprog = vertex_program_type();
             lvid_type lvid = graph.local_vid(vid);
@@ -960,7 +967,7 @@ namespace graphlab {
          * should be true. Otherwise it should be false.
          */
         void eval_sched_task(const lvid_type lvid,
-                             const message_type &msg) {
+                             message_type msg) {
             const typename graph_type::vertex_record &rec = graph.l_get_vertex_record(lvid);
             vertex_id_type vid = rec.gvid;
             char task_time_data[sizeof(timer)];
@@ -1005,27 +1012,28 @@ namespace graphlab {
             vertex_type vertex(local_vertex);
 
             /**************************************************************************/
-            /*                               init phase                               */
-            /**************************************************************************/
-            vprog.init(context, vertex, msg);
-
-            /**************************************************************************/
             /*                              Gather Phase                              */
             /**************************************************************************/
             conditional_gather_type gather_result;
-            std::vector<request_future<conditional_gather_type> > gather_futures;
+            std::vector<request_future<std::pair<conditional_gather_type, message_type> > > gather_futures;
                     foreach(procid_t mirror, local_vertex.mirrors()) {
                             gather_futures.push_back(
                                     object_fiber_remote_request(rmi,
                                                                 mirror,
-                                                                &async_consistent_engine::perform_gather_local,
+                                                                &async_consistent_engine::perform_gather,
                                                                 vid));
                         }
             gather_result += perform_gather_local(vid);
 
             for (size_t i = 0; i < gather_futures.size(); ++i) {
-                gather_result += gather_futures[i]();
+                gather_result += gather_futures[i]().first;
+                msg += gather_futures[i]().second;
             }
+
+            /**************************************************************************/
+            /*                               init phase                               */
+            /**************************************************************************/
+            vprog.init(context, vertex, msg);
 
             /**************************************************************************/
             /*                              apply phase                               */
