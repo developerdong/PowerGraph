@@ -614,33 +614,10 @@ namespace graphlab {
         void internal_signal(const vertex_type &vtx,
                              const message_type &message = message_type()) {
             if (force_stop) return;
-            if (started) {
-                const typename graph_type::vertex_record &rec = graph.l_get_vertex_record(vtx.local_id());
-                const procid_t owner = rec.owner;
-                if (endgame_mode) {
-                    // fast signal. push to the remote machine immediately
-                    if (owner != rmi.procid()) {
-                        const vertex_id_type vid = rec.gvid;
-                        rmi.remote_call(owner, &engine_type::rpc_signal, vid, message);
-                    } else {
-                        double priority;
-                        messages.add(vtx.local_id(), message, &priority);
-                        scheduler_ptr->schedule(vtx.local_id(), priority);
-                        consensus->cancel();
-                    }
-                } else {
-
-                    double priority;
-                    messages.add(vtx.local_id(), message, &priority);
-                    scheduler_ptr->schedule(vtx.local_id(), priority);
-                    consensus->cancel();
-                }
-            } else {
-                double priority;
-                messages.add(vtx.local_id(), message, &priority);
-                scheduler_ptr->schedule(vtx.local_id(), priority);
-                consensus->cancel();
-            }
+            double priority;
+            messages.add(vtx.local_id(), message, &priority);
+            scheduler_ptr->schedule(vtx.local_id(), priority);
+            consensus->cancel();
         } // end of schedule
 
 
@@ -794,7 +771,6 @@ namespace graphlab {
         void set_endgame_mode() {
             if (!endgame_mode) logstream(LOG_EMPH) << "Endgame mode\n";
             endgame_mode = true;
-            rmi.dc().set_fast_track_requests(true);
         }
 
         /**
@@ -1164,7 +1140,6 @@ namespace graphlab {
                 has_sched_msg = stat != sched_status::EMPTY;
                 if (stat != sched_status::EMPTY) {
                     eval_sched_task(sched_lvid, msg);
-                    if (endgame_mode) rmi.dc().flush();
                 } else if (!try_to_quit(threadid, has_sched_msg, sched_lvid, msg)) {
                     /*
                      * We failed to obtain a task, try to quit
