@@ -301,7 +301,9 @@ int main(int argc, char** argv) {
   const float runtime = engine.elapsed_seconds();
   dc.cout() << "Finished Running engine in " << runtime
             << " seconds." << std::endl;
-
+    unsigned int output_lvid = graph.get_local_graph().num_vertices() - 1;
+    dc.cout() << "Machine " << dc.procid() << " the shortest path of vertex " << output_lvid << ":\t"
+              << graph.l_vertex(output_lvid).data().dist << std::endl;
 
   // Save the final graph -----------------------------------------------------
   if (saveprefix != "") {
