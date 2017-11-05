@@ -389,7 +389,8 @@ namespace graphlab {
 
         // Various counters.
         atomic<uint64_t> programs_executed;
-        atomic<uint64_t> messages_transfered;
+        atomic<uint64_t> rpc_transferred;
+        atomic<uint64_t> gas_transferred;
 
         timer launch_timer;
 
@@ -623,7 +624,7 @@ namespace graphlab {
                     if (owner != rmi.procid()) {
                         const vertex_id_type vid = rec.gvid;
                         rmi.remote_call(owner, &engine_type::rpc_signal, vid, message);
-                        messages_transfered.inc();
+                        rpc_transferred.inc();
                     } else {
                         double priority;
                         messages.add(vtx.local_id(), message, &priority);
@@ -1013,7 +1014,7 @@ namespace graphlab {
             // if this is another machine's forward it
             if (rec.owner != rmi.procid()) {
                 rmi.remote_call(rec.owner, &engine_type::rpc_signal, vid, msg);
-                messages_transfered.inc();
+                rpc_transferred.inc();
                 return;
             }
             // I have to run this myself
@@ -1062,6 +1063,7 @@ namespace graphlab {
                                                                 &async_consistent_engine::perform_gather,
                                                                 vid,
                                                                 vprog));
+                            gas_transferred.inc();
                         }
             gather_result += perform_gather(vid, vprog);
 
@@ -1100,6 +1102,7 @@ namespace graphlab {
                                                                 vid,
                                                                 vprog,
                                                                 local_vertex.data()));
+                            gas_transferred.inc();
                         }
             perform_scatter_local(lvid, vprog);
             for (size_t i = 0; i < scatter_futures.size(); ++i)
@@ -1223,7 +1226,8 @@ namespace graphlab {
             engine_start_time = timer::approx_time_seconds();
             force_stop = false;
             endgame_mode = false;
-            messages_transfered = 0;
+            rpc_transferred = 0;
+            gas_transferred = 0;
             programs_executed = 0;
             launch_timer.start();
 
@@ -1245,11 +1249,19 @@ namespace graphlab {
                 termination_reason = execution_status::TASK_DEPLETION;
             }
 
-            size_t tmsgs = messages_transfered.value;
-            rmi.all_reduce(tmsgs);
-            messages_transfered.value = tmsgs;
+            size_t rpc_msgs = rpc_transferred.value;
+            rmi.all_reduce(rpc_msgs);
+            rpc_transferred.value = rpc_msgs;
 
-            rmi.cout() << "Transfered Messages: " << messages_transfered.value << std::endl;
+            rmi.cout() << "RPC Messages: " << rpc_transferred.value << std::endl;
+
+            size_t gas_msgs = gas_transferred.value;
+            rmi.all_reduce(gas_msgs);
+            gas_transferred.value = gas_msgs;
+
+            rmi.cout() << "GAS Messages: " << gas_transferred.value << std::endl;
+
+            rmi.cout() << "Total Messages: " << rpc_transferred.value + gas_transferred.value << std::endl;
 
             size_t ctasks = programs_executed.value;
             rmi.all_reduce(ctasks);
