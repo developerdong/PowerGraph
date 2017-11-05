@@ -615,34 +615,10 @@ namespace graphlab {
         void internal_signal(const vertex_type &vtx,
                              const message_type &message = message_type()) {
             if (force_stop) return;
-            if (started) {
-                const typename graph_type::vertex_record &rec = graph.l_get_vertex_record(vtx.local_id());
-                const procid_t owner = rec.owner;
-                if (endgame_mode) {
-                    // fast signal. push to the remote machine immediately
-                    if (owner != rmi.procid()) {
-                        const vertex_id_type vid = rec.gvid;
-                        rmi.remote_call(owner, &engine_type::rpc_signal, vid, message);
-                        messages_transfered.inc();
-                    } else {
-                        double priority;
-                        messages.add(vtx.local_id(), message, &priority);
-                        scheduler_ptr->schedule(vtx.local_id(), priority);
-                        consensus->cancel();
-                    }
-                } else {
-
-                    double priority;
-                    messages.add(vtx.local_id(), message, &priority);
-                    scheduler_ptr->schedule(vtx.local_id(), priority);
-                    consensus->cancel();
-                }
-            } else {
-                double priority;
-                messages.add(vtx.local_id(), message, &priority);
-                scheduler_ptr->schedule(vtx.local_id(), priority);
-                consensus->cancel();
-            }
+            double priority;
+            messages.add(vtx.local_id(), message, &priority);
+            scheduler_ptr->schedule(vtx.local_id(), priority);
+            consensus->cancel();
         } // end of schedule
 
 
@@ -796,7 +772,6 @@ namespace graphlab {
         void set_endgame_mode() {
             if (!endgame_mode) logstream(LOG_EMPH) << "Endgame mode\n";
             endgame_mode = true;
-            rmi.dc().set_fast_track_requests(true);
         }
 
         /**
@@ -863,9 +838,15 @@ namespace graphlab {
         }
 
 
-        conditional_gather_type perform_gather(vertex_id_type vid,
-                                               vertex_program_type &vprog_) {
-            vertex_program_type vprog = vprog_;
+        std::pair<conditional_gather_type, message_type> perform_gather(vertex_id_type vid) {
+            message_type msg = message_type();
+            messages.get(graph.local_vid(vid), msg);
+            return std::make_pair(perform_gather_local(vid), msg);
+        }
+
+
+        conditional_gather_type perform_gather_local(vertex_id_type vid) {
+            vertex_program_type vprog = vertex_program_type();
             lvid_type lvid = graph.local_vid(vid);
             local_vertex_type local_vertex(graph.l_vertex(lvid));
             vertex_type vertex(local_vertex);
@@ -1000,7 +981,7 @@ namespace graphlab {
          * should be true. Otherwise it should be false.
          */
         void eval_sched_task(const lvid_type lvid,
-                             const message_type &msg) {
+                             message_type msg) {
             const typename graph_type::vertex_record &rec = graph.l_get_vertex_record(lvid);
             vertex_id_type vid = rec.gvid;
             char task_time_data[sizeof(timer)];
@@ -1046,28 +1027,28 @@ namespace graphlab {
             vertex_type vertex(local_vertex);
 
             /**************************************************************************/
-            /*                               init phase                               */
-            /**************************************************************************/
-            vprog.init(context, vertex, msg);
-
-            /**************************************************************************/
             /*                              Gather Phase                              */
             /**************************************************************************/
             conditional_gather_type gather_result;
-            std::vector<request_future<conditional_gather_type> > gather_futures;
+            std::vector<request_future<std::pair<conditional_gather_type, message_type> > > gather_futures;
                     foreach(procid_t mirror, local_vertex.mirrors()) {
                             gather_futures.push_back(
                                     object_fiber_remote_request(rmi,
                                                                 mirror,
                                                                 &async_consistent_engine::perform_gather,
-                                                                vid,
-                                                                vprog));
+                                                                vid));
                         }
-            gather_result += perform_gather(vid, vprog);
+            gather_result += perform_gather_local(vid);
 
             for (size_t i = 0; i < gather_futures.size(); ++i) {
-                gather_result += gather_futures[i]();
+                gather_result += gather_futures[i]().first;
+                msg += gather_futures[i]().second;
             }
+
+            /**************************************************************************/
+            /*                               init phase                               */
+            /**************************************************************************/
+            vprog.init(context, vertex, msg);
 
             /**************************************************************************/
             /*                              apply phase                               */
@@ -1167,7 +1148,6 @@ namespace graphlab {
                 has_sched_msg = stat != sched_status::EMPTY;
                 if (stat != sched_status::EMPTY) {
                     eval_sched_task(sched_lvid, msg);
-                    if (endgame_mode) rmi.dc().flush();
                 } else if (!try_to_quit(threadid, has_sched_msg, sched_lvid, msg)) {
                     /*
                      * We failed to obtain a task, try to quit
