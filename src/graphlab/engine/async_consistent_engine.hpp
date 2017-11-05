@@ -389,6 +389,7 @@ namespace graphlab {
 
         // Various counters.
         atomic<uint64_t> programs_executed;
+        atomic<uint64_t> messages_transfered;
 
         timer launch_timer;
 
@@ -622,6 +623,7 @@ namespace graphlab {
                     if (owner != rmi.procid()) {
                         const vertex_id_type vid = rec.gvid;
                         rmi.remote_call(owner, &engine_type::rpc_signal, vid, message);
+                        messages_transfered.inc();
                     } else {
                         double priority;
                         messages.add(vtx.local_id(), message, &priority);
@@ -1011,6 +1013,7 @@ namespace graphlab {
             // if this is another machine's forward it
             if (rec.owner != rmi.procid()) {
                 rmi.remote_call(rec.owner, &engine_type::rpc_signal, vid, msg);
+                messages_transfered.inc();
                 return;
             }
             // I have to run this myself
@@ -1220,6 +1223,7 @@ namespace graphlab {
             engine_start_time = timer::approx_time_seconds();
             force_stop = false;
             endgame_mode = false;
+            messages_transfered = 0;
             programs_executed = 0;
             launch_timer.start();
 
@@ -1240,6 +1244,12 @@ namespace graphlab {
             if (termination_reason == execution_status::RUNNING) {
                 termination_reason = execution_status::TASK_DEPLETION;
             }
+
+            size_t tmsgs = messages_transfered.value;
+            rmi.all_reduce(tmsgs);
+            messages_transfered.value = tmsgs;
+
+            rmi.cout() << "Transfered Messages: " << messages_transfered.value << std::endl;
 
             size_t ctasks = programs_executed.value;
             rmi.all_reduce(ctasks);
