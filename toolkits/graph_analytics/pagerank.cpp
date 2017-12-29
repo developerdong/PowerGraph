@@ -99,7 +99,7 @@ public:
              const gather_type& total) {
 
     const double newval = (1.0 - RESET_PROB) * total + RESET_PROB;
-    last_change = (newval - vertex.data());
+      last_change = (newval - vertex.data()) / vertex.num_out_edges();
     vertex.data() = newval;
     if (ITERATIONS) context.signal(vertex);
   }
@@ -111,11 +111,7 @@ public:
     if (ITERATIONS) return graphlab::NO_EDGES;
     // In the dynamic case we run scatter on out edges if the we need
     // to maintain the delta cache or the tolerance is above bound.
-    if(USE_DELTA_CACHE || std::fabs(last_change) > TOLERANCE ) {
       return graphlab::OUT_EDGES;
-    } else {
-      return graphlab::NO_EDGES;
-    }
   }
 
   /* The scatter function just signal adjacent pages */
@@ -127,8 +123,6 @@ public:
 
     if(last_change > TOLERANCE || last_change < -TOLERANCE) {
         context.signal(edge.target());
-    } else {
-      context.signal(edge.target()); //, std::fabs(last_change));
     }
   }
 
