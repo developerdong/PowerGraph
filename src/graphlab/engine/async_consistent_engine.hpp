@@ -703,7 +703,6 @@ namespace graphlab {
                              const gather_type& delta) {
       if(use_cache) {
         const lvid_type lvid = vertex.local_id();
-        vertexlocks[lvid].lock();
         if( has_cache.get(lvid) ) {
           gather_cache[lvid] += delta;
         } else {
@@ -712,7 +711,6 @@ namespace graphlab {
           // gather_cache[lvid] = delta;
           // has_cache.set_bit(lvid);
         }
-        vertexlocks[lvid].unlock();
       }
     }
 
