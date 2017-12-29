@@ -246,7 +246,17 @@ int main(int argc, char** argv) {
   const double runtime = engine.elapsed_seconds();
   dc.cout() << "Finished Running engine in " << runtime
             << " seconds." << std::endl;
-
+    graph_type::lvid_type max_lvid = -1;
+    double max_value = -1;
+    for (graph_type::lvid_type lvid = 0;
+         lvid < graph.get_local_graph().num_vertices();
+         ++lvid) {
+        if (graph.l_vertex(lvid).data() > max_value) {
+            max_lvid = lvid;
+            max_value = graph.l_vertex(lvid).data();
+        }
+    }
+    std::cout << "Machine " << dc.procid() << " max rank: " << max_lvid << "\t" << max_value << std::endl;
 
   const double total_rank = graph.map_reduce_vertices<double>(map_rank);
   std::cout << "Total rank: " << total_rank << std::endl;
