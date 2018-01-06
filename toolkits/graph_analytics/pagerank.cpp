@@ -99,7 +99,7 @@ public:
              const gather_type& total) {
 
     const double newval = (1.0 - RESET_PROB) * total + RESET_PROB;
-    last_change = (newval - vertex.data());
+      last_change = (newval - vertex.data()) / vertex.num_out_edges();
     vertex.data() = newval;
     if (ITERATIONS) context.signal(vertex);
   }
@@ -111,11 +111,7 @@ public:
     if (ITERATIONS) return graphlab::NO_EDGES;
     // In the dynamic case we run scatter on out edges if the we need
     // to maintain the delta cache or the tolerance is above bound.
-    if(USE_DELTA_CACHE || std::fabs(last_change) > TOLERANCE ) {
       return graphlab::OUT_EDGES;
-    } else {
-      return graphlab::NO_EDGES;
-    }
   }
 
   /* The scatter function just signal adjacent pages */
@@ -127,8 +123,6 @@ public:
 
     if(last_change > TOLERANCE || last_change < -TOLERANCE) {
         context.signal(edge.target());
-    } else {
-      context.signal(edge.target()); //, std::fabs(last_change));
     }
   }
 
@@ -252,7 +246,17 @@ int main(int argc, char** argv) {
   const double runtime = engine.elapsed_seconds();
   dc.cout() << "Finished Running engine in " << runtime
             << " seconds." << std::endl;
-
+    graph_type::lvid_type max_lvid = -1;
+    double max_value = -1;
+    for (graph_type::lvid_type lvid = 0;
+         lvid < graph.get_local_graph().num_vertices();
+         ++lvid) {
+        if (graph.l_vertex(lvid).data() > max_value) {
+            max_lvid = lvid;
+            max_value = graph.l_vertex(lvid).data();
+        }
+    }
+    std::cout << "Machine " << dc.procid() << " max rank: " << max_lvid << "\t" << max_value << std::endl;
 
   const double total_rank = graph.map_reduce_vertices<double>(map_rank);
   std::cout << "Total rank: " << total_rank << std::endl;
