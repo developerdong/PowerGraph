@@ -620,13 +620,11 @@ namespace graphlab {
          */
         void rpc_signal(vertex_id_type vid,
                         const message_type &message,
-                        const conditional_gather_type cache,
                         const procid_t mirror) {
             if (force_stop) return;
             const lvid_type local_vid = graph.local_vid(vid);
             cachelocks[local_vid * rmi.numprocs() + mirror].lock();
-            remote_gather_cache[local_vid * rmi.numprocs() + mirror] = cache;
-            has_remote_cache.set_bit(local_vid * rmi.numprocs() + mirror);
+            has_remote_cache.clear_bit(local_vid * rmi.numprocs() + mirror);
             cachelocks[local_vid * rmi.numprocs() + mirror].unlock();
             double priority;
             messages.add(local_vid, message, &priority);
@@ -1043,8 +1041,7 @@ namespace graphlab {
 
             if (rec.owner != rmi.procid()) {
                 // if this is another machine's forward it
-                rmi.remote_call(rec.owner, &engine_type::rpc_signal, vid, msg, perform_gather(vid, vprog),
-                                rmi.procid());
+                rmi.remote_call(rec.owner, &engine_type::rpc_signal, vid, msg, rmi.procid());
                 rpc_transferred.inc();
             } else {
                 // I have to run this myself
