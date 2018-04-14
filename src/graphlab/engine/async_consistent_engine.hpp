@@ -648,9 +648,17 @@ namespace graphlab {
                 if (endgame_mode) {
                     // fast signal. push to the remote machine immediately
                     if (owner != rmi.procid()) {
-                        const vertex_id_type vid = rec.gvid;
-                        rmi.remote_call(owner, &engine_type::rpc_signal, vid, message, rmi.procid());
-                        rpc_transferred.inc();
+                        if (typeid(typename VertexProgram::gather_type) == typeid(graphlab::empty)) {
+                            const vertex_id_type vid = rec.gvid;
+                            rmi.remote_call(owner, &engine_type::rpc_signal, vid, message, rmi.procid());
+                            rpc_transferred.inc();
+                        } else {
+                            double priority;
+                            messages.add(vtx.local_id(), message, &priority);
+                            scheduler_ptr->schedule(vtx.local_id(), priority);
+                            consensus->cancel();
+                        }
+
                     } else {
                         double priority;
                         messages.add(vtx.local_id(), message, &priority);
