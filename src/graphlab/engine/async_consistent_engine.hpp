@@ -348,6 +348,24 @@ namespace graphlab {
          */
         dense_bitset has_cache;
 
+        /**
+         * \brief This optional vector contains caches of previous gather
+         * contributions for all the mirrors.
+         *
+         * Caching is done locally or remotely, and therefore a high-degree vertex may
+         * have multiple caches (one per mirror).
+         */
+        std::vector<conditional_gather_type> remote_gather_cache;
+
+        /**
+         * \brief A bit indicating if the local gather cache of mirror for that vertex is
+         * available.
+         */
+        dense_bitset has_remote_cache;
+
+        /// Per mirror cache locks
+        std::vector<simple_spinlock> cachelocks;
+
         bool use_cache;
 
         /// Engine threads.
@@ -548,6 +566,10 @@ namespace graphlab {
             vertexlocks.resize(graph.num_local_vertices());
             program_running.resize(graph.num_local_vertices());
             hasnext.resize(graph.num_local_vertices());
+            remote_gather_cache.resize(graph.num_local_vertices() * rmi.numprocs());
+            has_remote_cache.resize(graph.num_local_vertices() * rmi.numprocs());
+            has_remote_cache.clear();
+            cachelocks.resize(graph.num_local_vertices() * rmi.numprocs());
             if (use_cache) {
                 gather_cache.resize(graph.num_local_vertices(), gather_type());
                 has_cache.resize(graph.num_local_vertices());
@@ -597,9 +619,13 @@ namespace graphlab {
          * This is used to receive a message forwarded from another machine
          */
         void rpc_signal(vertex_id_type vid,
-                        const message_type &message) {
+                        const message_type &message,
+                        const procid_t mirror) {
             if (force_stop) return;
             const lvid_type local_vid = graph.local_vid(vid);
+            cachelocks[local_vid * rmi.numprocs() + mirror].lock();
+            has_remote_cache.clear_bit(local_vid * rmi.numprocs() + mirror);
+            cachelocks[local_vid * rmi.numprocs() + mirror].unlock();
             double priority;
             messages.add(local_vid, message, &priority);
             scheduler_ptr->schedule(local_vid, priority);
@@ -990,13 +1016,6 @@ namespace graphlab {
                 task_time = reinterpret_cast<timer *>(task_time_data);
                 new(task_time) timer();
             }
-            // if this is another machine's forward it
-            if (rec.owner != rmi.procid()) {
-                rmi.remote_call(rec.owner, &engine_type::rpc_signal, vid, msg);
-                rpc_transferred.inc();
-                return;
-            }
-            // I have to run this myself
 
             if (!get_exclusive_access_to_vertex(lvid, msg)) return;
 
@@ -1025,67 +1044,89 @@ namespace graphlab {
             local_vertex_type local_vertex(graph.l_vertex(lvid));
             vertex_type vertex(local_vertex);
 
-            /**************************************************************************/
-            /*                              Gather Phase                              */
-            /**************************************************************************/
-            conditional_gather_type gather_result;
-            std::vector<request_future<std::pair<conditional_gather_type, message_type> > > gather_futures;
-                    foreach(procid_t mirror, local_vertex.mirrors()) {
-                            gather_futures.push_back(
-                                    object_fiber_remote_request(rmi,
-                                                                mirror,
-                                                                &async_consistent_engine::perform_gather,
-                                                                vid));
-                            gas_transferred.inc();
-                        }
-            gather_result += perform_gather_local(vid);
+            if (rec.owner != rmi.procid()) {
+                // if this is another machine's forward it
+                rmi.remote_call(rec.owner, &engine_type::rpc_signal, vid, msg, rmi.procid());
+                rpc_transferred.inc();
+            } else {
+                // I have to run this myself
+                /**************************************************************************/
+                /*                              Gather Phase                              */
+                /**************************************************************************/
+                conditional_gather_type gather_result;
+                std::vector<request_future<std::pair<conditional_gather_type, message_type> > > gather_futures;
+                std::vector<procid_t> gather_procs;
+                        foreach(procid_t mirror, local_vertex.mirrors()) {
+                                if (!scheduler_ptr->empty() && has_remote_cache.get(lvid * rmi.numprocs() + mirror)) {
+                                    cachelocks[lvid * rmi.numprocs() + mirror].lock();
+                                    gather_result += remote_gather_cache[lvid * rmi.numprocs() + mirror];
+                                    cachelocks[lvid * rmi.numprocs() + mirror].unlock();
+                                } else {
+                                    gather_futures.push_back(
+                                            object_fiber_remote_request(rmi,
+                                                                        mirror,
+                                                                        &async_consistent_engine::perform_gather,
+                                                                        vid));
+                                    gather_procs.push_back(mirror);
+                                    gas_transferred.inc();
+                                }
+                            }
+                gather_result += perform_gather_local(vid);
 
-            for (size_t i = 0; i < gather_futures.size(); ++i) {
-                gather_result += gather_futures[i]().first;
-                msg += gather_futures[i]().second;
+                for (size_t i = 0; i < gather_futures.size(); ++i) {
+                    gather_result += gather_futures[i]().first;
+                    msg += gather_futures[i]().second;
+                    procid_t mirror = gather_procs[i];
+                    cachelocks[lvid * rmi.numprocs() + mirror].lock();
+                    remote_gather_cache[lvid * rmi.numprocs() + mirror] = gather_futures[i]().first;
+                    has_remote_cache.set_bit(lvid * rmi.numprocs() + mirror);
+                    cachelocks[lvid * rmi.numprocs() + mirror].unlock();
+                }
+
+                /**************************************************************************/
+                /*                               init phase                               */
+                /**************************************************************************/
+                vprog.init(context, vertex, msg);
+
+                /**************************************************************************/
+                /*                              apply phase                               */
+                /**************************************************************************/
+                vertexlocks[lvid].lock();
+                vprog.apply(context, vertex, gather_result.value);
+                vertexlocks[lvid].unlock();
+
+
+                /**************************************************************************/
+                /*                            scatter phase                               */
+                /**************************************************************************/
+
+                // should I wait for the scatter? nah... but in case you want to
+                // the code is commented below
+                /*foreach(procid_t mirror, local_vertex.mirrors()) {
+                  rmi.remote_call(mirror,
+                                  &async_consistent_engine::perform_scatter,
+                                  vid,
+                                  vprog,
+                                  local_vertex.data());
+                }*/
+
+                std::vector<request_future<void> > scatter_futures;
+                        foreach(procid_t mirror, local_vertex.mirrors()) {
+                                scatter_futures.push_back(
+                                        object_fiber_remote_request(rmi,
+                                                                    mirror,
+                                                                    &async_consistent_engine::perform_scatter,
+                                                                    vid,
+                                                                    vprog,
+                                                                    local_vertex.data()));
+                                gas_transferred.inc();
+                            }
+                perform_scatter_local(lvid, vprog);
+                for (size_t i = 0; i < scatter_futures.size(); ++i)
+                    scatter_futures[i]();
+
+                programs_executed.inc();
             }
-
-            /**************************************************************************/
-            /*                               init phase                               */
-            /**************************************************************************/
-            vprog.init(context, vertex, msg);
-
-            /**************************************************************************/
-            /*                              apply phase                               */
-            /**************************************************************************/
-            vertexlocks[lvid].lock();
-            vprog.apply(context, vertex, gather_result.value);
-            vertexlocks[lvid].unlock();
-
-
-            /**************************************************************************/
-            /*                            scatter phase                               */
-            /**************************************************************************/
-
-            // should I wait for the scatter? nah... but in case you want to
-            // the code is commented below
-            /*foreach(procid_t mirror, local_vertex.mirrors()) {
-              rmi.remote_call(mirror,
-                              &async_consistent_engine::perform_scatter,
-                              vid,
-                              vprog,
-                              local_vertex.data());
-            }*/
-
-            std::vector<request_future<void> > scatter_futures;
-                    foreach(procid_t mirror, local_vertex.mirrors()) {
-                            scatter_futures.push_back(
-                                    object_fiber_remote_request(rmi,
-                                                                mirror,
-                                                                &async_consistent_engine::perform_scatter,
-                                                                vid,
-                                                                vprog,
-                                                                local_vertex.data()));
-                            gas_transferred.inc();
-                        }
-            perform_scatter_local(lvid, vprog);
-            for (size_t i = 0; i < scatter_futures.size(); ++i)
-                scatter_futures[i]();
 
             /************************************************************************/
             /*                           Release Locks                              */
@@ -1102,7 +1143,6 @@ namespace graphlab {
                         task_time->current_time();
                 task_time->~timer();
             }
-            programs_executed.inc();
         }
 
 
