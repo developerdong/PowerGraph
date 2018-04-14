@@ -642,10 +642,34 @@ namespace graphlab {
         void internal_signal(const vertex_type &vtx,
                              const message_type &message = message_type()) {
             if (force_stop) return;
-            double priority;
-            messages.add(vtx.local_id(), message, &priority);
-            scheduler_ptr->schedule(vtx.local_id(), priority);
-            consensus->cancel();
+            if (started) {
+                const typename graph_type::vertex_record &rec = graph.l_get_vertex_record(vtx.local_id());
+                const procid_t owner = rec.owner;
+                if (endgame_mode) {
+                    // fast signal. push to the remote machine immediately
+                    if (owner != rmi.procid()) {
+                        const vertex_id_type vid = rec.gvid;
+                        rmi.remote_call(owner, &engine_type::rpc_signal, vid, message, rmi.procid());
+                        rpc_transferred.inc();
+                    } else {
+                        double priority;
+                        messages.add(vtx.local_id(), message, &priority);
+                        scheduler_ptr->schedule(vtx.local_id(), priority);
+                        consensus->cancel();
+                    }
+                } else {
+
+                    double priority;
+                    messages.add(vtx.local_id(), message, &priority);
+                    scheduler_ptr->schedule(vtx.local_id(), priority);
+                    consensus->cancel();
+                }
+            } else {
+                double priority;
+                messages.add(vtx.local_id(), message, &priority);
+                scheduler_ptr->schedule(vtx.local_id(), priority);
+                consensus->cancel();
+            }
         } // end of schedule
 
 
